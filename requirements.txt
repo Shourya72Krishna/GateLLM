@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+litellm
+pydantic-settings
+redis
+qdrant-client
+sentence-transformers
+scikit-learn
+streamlit
+locust
+pytest
+httpx
