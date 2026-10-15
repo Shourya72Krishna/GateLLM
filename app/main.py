@@ -1,4 +1,3 @@
-import time
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -9,6 +8,8 @@ from pydantic import BaseModel
 from app.auth import require_api_key
 from app.config import settings
 from app.db import init_db, log_request
+from app.pricing import calculate_cost
+from app.providers import AllProvidersFailed, build_chain, call_with_fallback
 
 
 @asynccontextmanager
@@ -32,13 +33,23 @@ async def health():
     return {"status": "ok"}
 
 
+def compute_cost(model: str, resp: Any) -> float:
+    usage = resp.usage
+    cost = calculate_cost(model, usage.prompt_tokens, usage.completion_tokens)
+    if cost is not None:
+        return cost
+    try:  # model not in our table: fall back to LiteLLM's price data
+        return litellm.completion_cost(completion_response=resp) or 0.0
+    except Exception:
+        return 0.0
+
+
 @app.post("/v1/chat/completions")
 async def chat_completions(req: ChatRequest, _key: str = Depends(require_api_key)):
     # "auto" -> cheap model for now (router comes in Week 2)
     model = settings.cheap_model if req.model in (None, "auto") else req.model
 
     kwargs: dict[str, Any] = {
-        "model": model,
         "messages": req.messages,
         "api_key": settings.groq_api_key,
     }
@@ -47,26 +58,19 @@ async def chat_completions(req: ChatRequest, _key: str = Depends(require_api_key
     if req.max_tokens is not None:
         kwargs["max_tokens"] = req.max_tokens
 
-    start = time.perf_counter()
     try:
-        resp = await litellm.acompletion(**kwargs)
-    except Exception as e:
-        latency_ms = (time.perf_counter() - start) * 1000
-        log_request(model, 0, 0, latency_ms, 0.0, status="error", error=str(e)[:500])
-        raise HTTPException(status_code=502, detail=f"Provider error: {e}")
+        resp, used_model, latency_ms = await call_with_fallback(
+            kwargs, build_chain(model)
+        )
+    except AllProvidersFailed as e:
+        raise HTTPException(status_code=502, detail=f"All providers failed: {e}")
 
-    latency_ms = (time.perf_counter() - start) * 1000
     usage = resp.usage
-    try:
-        cost = litellm.completion_cost(completion_response=resp) or 0.0
-    except Exception:
-        cost = 0.0  # model missing from LiteLLM's price table
-
     log_request(
-        model,
+        used_model,
         usage.prompt_tokens,
         usage.completion_tokens,
         latency_ms,
-        cost,
+        compute_cost(used_model, resp),
     )
     return resp.model_dump()

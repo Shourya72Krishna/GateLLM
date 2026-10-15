@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     strong_model: str = "groq/openai/gpt-oss-120b"
     db_path: str = "gatellm.db"
     rate_limit_per_min: int = 30
+    request_timeout: float = 30.0
+    redis_url: str = "redis://localhost:6379/0"
+    qdrant_url: str = "http://localhost:6333"
 
 
 settings = Settings()
