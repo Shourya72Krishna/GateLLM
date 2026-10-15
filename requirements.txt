@@ -10,3 +10,4 @@ streamlit
 locust
 pytest
 httpx
+openai
